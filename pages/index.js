@@ -831,7 +831,7 @@ export default function SpeedAndFormPlatform() {
                       value={week.weekly_observations || ''}
                       onChange={(e) => canEdit && updateField(week.id, 'weekly_observations', e.target.value)}
                       disabled={!canEdit}
-                      placeholder="Key sessions, how they felt..."
+                      placeholder="What were the breakthrough moments this week? Any insights on pacing, recovery, or mental state? Note anything that felt different - good or challenging..."
                       className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-3 text-sm h-24 disabled:opacity-50 placeholder-white/30"
                     />
                   </div>
