@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, Activity, Heart, Settings, Calendar, Home, LogOut, ChevronDown, X, Check, Upload, Edit2 } from 'lucide-react';
+import { TrendingUp, Activity, Heart, Settings, Calendar, Home, LogOut, ChevronDown, X, Check, Edit2, MoreVertical } from 'lucide-react';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_KEY;
@@ -28,11 +28,12 @@ export default function SpeedAndFormPlatform() {
   const [selectedAthlete, setSelectedAthlete] = useState(null);
   const [weeklyData, setWeeklyData] = useState([]);
   const [expandedWeek, setExpandedWeek] = useState(null);
-  const [editingWeek, setEditingWeek] = useState(null);
   const [loading, setLoading] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [showCompleteModal, setShowCompleteModal] = useState(false);
+  const [validationWarnings, setValidationWarnings] = useState([]);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('speedandform_user');
@@ -124,7 +125,66 @@ export default function SpeedAndFormPlatform() {
     
     // Auto-create Week 1 if no data exists
     if (!data || data.length === 0) {
-      await addWeek(athleteId);
+      await createFirstWeek(athleteId);
+    } else {
+      // Check if there's an active week, if not create one
+      const hasActiveWeek = data.some(w => w.status === 'active');
+      if (!hasActiveWeek) {
+        const lastWeek = data[0];
+        await createNewWeek(athleteId, lastWeek.week_num + 1);
+      }
+    }
+  };
+
+  const createFirstWeek = async (athleteId) => {
+    const today = new Date();
+    const startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - today.getDay()); // Sunday
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6); // Saturday
+
+    const newWeek = {
+      athlete_id: athleteId,
+      week_num: 1,
+      date_start: startOfWeek.toISOString().split('T')[0],
+      date_end: endOfWeek.toISOString().split('T')[0],
+      status: 'active',
+      total_volume: 0
+    };
+
+    const inserted = await api.fetch('weekly_data', {
+      method: 'POST',
+      body: JSON.stringify(newWeek)
+    });
+
+    if (inserted && inserted[0]) {
+      setWeeklyData([inserted[0]]);
+    }
+  };
+
+  const createNewWeek = async (athleteId, weekNum) => {
+    const today = new Date();
+    const startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - today.getDay());
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6);
+
+    const newWeek = {
+      athlete_id: athleteId,
+      week_num: weekNum,
+      date_start: startOfWeek.toISOString().split('T')[0],
+      date_end: endOfWeek.toISOString().split('T')[0],
+      status: 'active',
+      total_volume: 0
+    };
+
+    const inserted = await api.fetch('weekly_data', {
+      method: 'POST',
+      body: JSON.stringify(newWeek)
+    });
+
+    if (inserted && inserted[0]) {
+      setWeeklyData([inserted[0], ...weeklyData]);
     }
   };
 
@@ -155,26 +215,6 @@ export default function SpeedAndFormPlatform() {
     }
   };
 
-  const addWeek = async (athleteId = null) => {
-    const targetAthleteId = athleteId || selectedAthlete.id;
-    const lastWeek = weeklyData[0];
-    const newWeek = {
-      athlete_id: targetAthleteId,
-      week_num: lastWeek ? lastWeek.week_num + 1 : 1,
-      date: new Date().toISOString().split('T')[0],
-      total_volume: 0
-    };
-
-    const inserted = await api.fetch('weekly_data', {
-      method: 'POST',
-      body: JSON.stringify(newWeek)
-    });
-
-    if (inserted && inserted[0]) {
-      setWeeklyData([inserted[0], ...weeklyData]);
-    }
-  };
-
   const updateField = async (weekId, field, value) => {
     await api.fetch(`weekly_data?id=eq.${weekId}`, {
       method: 'PATCH',
@@ -183,26 +223,153 @@ export default function SpeedAndFormPlatform() {
     setWeeklyData(weeklyData.map(w => w.id === weekId ? { ...w, [field]: value } : w));
   };
 
+  const validateWeek = (week) => {
+    const warnings = [];
+    
+    // Check required fields
+    const required = {
+      vo2_max: week.vo2_max,
+      resting_hr: week.resting_hr,
+      total_volume: week.total_volume
+    };
+
+    const missingFields = Object.entries(required)
+      .filter(([key, value]) => !value || value === '' || value === 0)
+      .map(([key]) => key.replace('_', ' ').toUpperCase());
+
+    if (missingFields.length > 0) {
+      return {
+        valid: false,
+        missing: missingFields
+      };
+    }
+
+    // Soft validation - check for unusual values
+    const lastWeek = weeklyData[1];
+    if (lastWeek) {
+      // VO2 jumped more than 10 points
+      if (week.vo2_max && lastWeek.vo2_max && Math.abs(week.vo2_max - lastWeek.vo2_max) > 10) {
+        warnings.push(`VO2 changed by ${Math.abs(week.vo2_max - lastWeek.vo2_max)} points (last week: ${lastWeek.vo2_max})`);
+      }
+      
+      // Volume more than 2x last week
+      if (week.total_volume && lastWeek.total_volume && week.total_volume > lastWeek.total_volume * 2) {
+        warnings.push(`Volume is ${Math.round(week.total_volume / lastWeek.total_volume)}x your last week (${lastWeek.total_volume}mi)`);
+      }
+    }
+
+    // Check for extreme values
+    if (week.resting_hr > 100 || week.resting_hr < 35) {
+      warnings.push(`Resting HR of ${week.resting_hr} seems unusual`);
+    }
+
+    if (week.total_volume > 150) {
+      warnings.push(`Weekly volume of ${week.total_volume}mi is very high`);
+    }
+
+    return {
+      valid: true,
+      warnings
+    };
+  };
+
+  const handleCompleteWeek = () => {
+    const activeWeek = weeklyData.find(w => w.status === 'active');
+    if (!activeWeek) return;
+
+    const validation = validateWeek(activeWeek);
+    
+    if (!validation.valid) {
+      setError(`Please fill in required fields: ${validation.missing.join(', ')}`);
+      return;
+    }
+
+    if (validation.warnings && validation.warnings.length > 0) {
+      setValidationWarnings(validation.warnings);
+    }
+
+    setShowCompleteModal(true);
+  };
+
+  const confirmCompleteWeek = async () => {
+    const activeWeek = weeklyData.find(w => w.status === 'active');
+    if (!activeWeek) return;
+
+    // Mark week as completed
+    await api.fetch(`weekly_data?id=eq.${activeWeek.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status: 'completed',
+        completed_at: new Date().toISOString()
+      })
+    });
+
+    // Create next week
+    await createNewWeek(selectedAthlete.id, activeWeek.week_num + 1);
+
+    // Reload data
+    await loadAthleteData(selectedAthlete.id);
+
+    setShowCompleteModal(false);
+    setValidationWarnings([]);
+    setError('');
+  };
+
   const deleteWeek = async (weekId) => {
     if (confirm('Are you sure you want to delete this week?')) {
       await api.fetch(`weekly_data?id=eq.${weekId}`, {
         method: 'DELETE'
       });
       setWeeklyData(weeklyData.filter(w => w.id !== weekId));
-      setEditingWeek(null);
     }
+  };
+
+  // Mini Sparkline Component
+  const Sparkline = ({ data }) => {
+    if (!data || data.length < 2) return <div className="text-xs text-gray-500">Not enough data</div>;
+    
+    const values = data.map(d => d.vo2_max).filter(v => v);
+    const max = Math.max(...values);
+    const min = Math.min(...values);
+    const range = max - min || 1;
+    
+    const points = values.map((v, i) => ({
+      x: (i / (values.length - 1)) * 100,
+      y: 100 - ((v - min) / range) * 100
+    }));
+
+    const pathData = points.map((p, i) => 
+      `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`
+    ).join(' ');
+
+    return (
+      <svg viewBox="0 0 100 30" className="w-24 h-8">
+        <path
+          d={pathData}
+          fill="none"
+          stroke="url(#sparkline-gradient)"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+        <defs>
+          <linearGradient id="sparkline-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#a855f7" />
+            <stop offset="100%" stopColor="#ec4899" />
+          </linearGradient>
+        </defs>
+      </svg>
+    );
   };
 
   const ProfileSetup = () => {
     const [profile, setProfile] = useState({
-      age: selectedAthlete.age || '',
-      starting_weight: selectedAthlete.starting_weight || '',
-      baseline_vo2: selectedAthlete.baseline_vo2 || '',
-      current_vo2: selectedAthlete.current_vo2 || '',
-      target_vo2: selectedAthlete.target_vo2 || '',
-      baseline_weekly_miles: selectedAthlete.baseline_weekly_miles || '',
-      hrv_baseline_low: selectedAthlete.hrv_baseline_low || '',
-      hrv_baseline_high: selectedAthlete.hrv_baseline_high || ''
+      age: selectedAthlete?.age || '',
+      starting_weight: selectedAthlete?.starting_weight || '',
+      baseline_vo2: selectedAthlete?.baseline_vo2 || '',
+      target_vo2: selectedAthlete?.target_vo2 || '',
+      baseline_weekly_miles: selectedAthlete?.baseline_weekly_miles || '',
+      hrv_baseline_low: selectedAthlete?.hrv_baseline_low || '',
+      hrv_baseline_high: selectedAthlete?.hrv_baseline_high || ''
     });
 
     return (
@@ -238,22 +405,13 @@ export default function SpeedAndFormPlatform() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">Baseline VO2</label>
                 <input
                   type="number"
                   value={profile.baseline_vo2}
                   onChange={(e) => setProfile({...profile, baseline_vo2: e.target.value})}
-                  className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-3 text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">Current VO2</label>
-                <input
-                  type="number"
-                  value={profile.current_vo2}
-                  onChange={(e) => setProfile({...profile, current_vo2: e.target.value})}
                   className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-3 text-white"
                 />
               </div>
@@ -442,10 +600,11 @@ export default function SpeedAndFormPlatform() {
   const isCoach = currentUser?.role === 'coach';
   const canEdit = isCoach || (currentUser?.athlete_id === selectedAthlete?.id);
   
-  // FIXED: Use current week's VO2 for progress calculation
-  const currentWeek = weeklyData[0];
-  const progress = selectedAthlete?.baseline_vo2 && selectedAthlete?.target_vo2 && currentWeek?.vo2_max
-    ? ((currentWeek.vo2_max - selectedAthlete.baseline_vo2) / (selectedAthlete.target_vo2 - selectedAthlete.baseline_vo2) * 100).toFixed(1)
+  const activeWeek = weeklyData.find(w => w.status === 'active') || weeklyData[0];
+  const lastWeek = weeklyData.find((w, i) => i === 1 && w.status === 'completed');
+  
+  const progress = selectedAthlete?.baseline_vo2 && selectedAthlete?.target_vo2 && activeWeek?.vo2_max
+    ? ((activeWeek.vo2_max - selectedAthlete.baseline_vo2) / (selectedAthlete.target_vo2 - selectedAthlete.baseline_vo2) * 100).toFixed(1)
     : 0;
 
   const getHrvStatus = (hrv, low, high) => {
@@ -453,6 +612,12 @@ export default function SpeedAndFormPlatform() {
     if (hrv < low || hrv > high) return { text: 'Unbalanced', color: 'text-pink-400' };
     return { text: 'Balanced', color: 'text-purple-400' };
   };
+
+  const hrvStatus = getHrvStatus(
+    activeWeek?.hrv,
+    selectedAthlete?.hrv_baseline_low,
+    selectedAthlete?.hrv_baseline_high
+  );
 
   const BottomNav = () => (
     <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-slate-950 to-slate-950/95 backdrop-blur-xl border-t border-slate-800 z-[9999]">
@@ -476,45 +641,138 @@ export default function SpeedAndFormPlatform() {
           <span className="text-xs">Library</span>
         </button>
         <button
-          onClick={() => setNavView('profile')}
+          onClick={() => setNavView('more')}
           className={`flex flex-col items-center gap-1 px-4 py-2 rounded-lg transition-colors ${
-            navView === 'profile' ? 'text-purple-400' : 'text-gray-500 hover:text-gray-300'
+            navView === 'more' ? 'text-purple-400' : 'text-gray-500 hover:text-gray-300'
           }`}
         >
-          <Settings size={22} />
-          <span className="text-xs">Profile</span>
-        </button>
-        <button
-          onClick={logout}
-          className="flex flex-col items-center gap-1 px-4 py-2 rounded-lg text-gray-500 hover:text-red-400 transition-colors"
-        >
-          <LogOut size={22} />
-          <span className="text-xs">Logout</span>
+          <MoreVertical size={22} />
+          <span className="text-xs">More</span>
         </button>
       </div>
     </div>
   );
 
-  // Library View with Edit Capability
+  // Complete Week Modal
+  const CompleteWeekModal = () => {
+    if (!showCompleteModal) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[10000] flex items-center justify-center p-4">
+        <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-6 max-w-md w-full">
+          <h3 className="text-xl font-light mb-4">Complete Week {activeWeek?.week_num}?</h3>
+          
+          <div className="space-y-3 mb-6">
+            <div className="text-sm text-gray-400 uppercase tracking-wider mb-2">Required ✓</div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-400">VO2 Max:</span>
+              <span className="text-white">{activeWeek?.vo2_max || '-'}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-400">Resting HR:</span>
+              <span className="text-white">{activeWeek?.resting_hr || '-'} bpm</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-400">Weekly Volume:</span>
+              <span className="text-white">{activeWeek?.total_volume || 0} mi</span>
+            </div>
+
+            {(activeWeek?.hrv || activeWeek?.sleep_quality || activeWeek?.weight) && (
+              <>
+                <div className="text-sm text-gray-400 uppercase tracking-wider mt-4 mb-2">Optional</div>
+                {activeWeek?.hrv && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-400">HRV:</span>
+                    <span className="text-white">{activeWeek.hrv}</span>
+                  </div>
+                )}
+                {activeWeek?.sleep_quality && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-400">Sleep:</span>
+                    <span className="text-white">{activeWeek.sleep_quality}/10</span>
+                  </div>
+                )}
+                {activeWeek?.weight && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-400">Weight:</span>
+                    <span className="text-white">{activeWeek.weight} lbs</span>
+                  </div>
+                )}
+              </>
+            )}
+
+            {(activeWeek?.threshold_distance || activeWeek?.long_run_distance || activeWeek?.vo2_workout) && (
+              <>
+                <div className="text-sm text-gray-400 uppercase tracking-wider mt-4 mb-2">Key Sessions</div>
+                {activeWeek?.threshold_distance && (
+                  <div className="text-sm text-gray-300">
+                    • Threshold: {activeWeek.threshold_distance}mi @ {activeWeek.threshold_pace || '-'} ({activeWeek.threshold_hr || '-'}bpm)
+                  </div>
+                )}
+                {activeWeek?.long_run_distance && (
+                  <div className="text-sm text-gray-300">
+                    • Long Run: {activeWeek.long_run_distance}mi @ {activeWeek.long_run_pace || '-'} ({activeWeek.long_run_hr || '-'}bpm)
+                  </div>
+                )}
+                {activeWeek?.vo2_workout && (
+                  <div className="text-sm text-gray-300">
+                    • VO2: {activeWeek.vo2_workout} @ {activeWeek.vo2_pace || '-'} ({activeWeek.vo2_hr || '-'}bpm)
+                  </div>
+                )}
+              </>
+            )}
+
+            {validationWarnings.length > 0 && (
+              <div className="mt-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                <div className="text-sm text-yellow-400 font-medium mb-2">⚠️ Unusual Data Detected</div>
+                {validationWarnings.map((warning, i) => (
+                  <div key={i} className="text-xs text-yellow-300">• {warning}</div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <p className="text-sm text-gray-400 mb-6">
+            Week {activeWeek?.week_num} will be saved and Week {(activeWeek?.week_num || 0) + 1} will become active.
+          </p>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => {
+                setShowCompleteModal(false);
+                setValidationWarnings([]);
+              }}
+              className="flex-1 px-4 py-3 bg-slate-800 text-white rounded-xl font-medium hover:bg-slate-700 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={confirmCompleteWeek}
+              className="flex-1 px-4 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-medium hover:shadow-lg hover:shadow-purple-500/50 transition-all flex items-center justify-center gap-2"
+            >
+              <Check size={18} />
+              Complete Week
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Library View
   if (navView === 'library') {
+    const completedWeeks = weeklyData.filter(w => w.status === 'completed').slice(0, 12);
+    
     return (
       <div className="min-h-screen bg-gradient-to-b from-slate-950 via-purple-950/20 to-slate-950 text-white p-4 pb-24">
         <div className="max-w-3xl mx-auto">
-          <div className="flex items-center justify-between mb-6">
-            <h1 className="text-2xl font-light">Week Library</h1>
-            <button
-              onClick={() => addWeek()}
-              className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg text-sm font-medium hover:shadow-lg hover:shadow-purple-500/50 transition-all"
-            >
-              + New Week
-            </button>
-          </div>
+          <h1 className="text-2xl font-light mb-6">Week Library</h1>
 
-          {weeklyData.length > 0 && (
+          {completedWeeks.length > 0 && (
             <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 mb-6">
-              <h3 className="text-sm font-medium text-white uppercase tracking-wider mb-4">VO2 Progress</h3>
+              <h3 className="text-sm font-medium text-white uppercase tracking-wider mb-4">VO2 Progress Chart</h3>
               <div className="relative h-32 flex items-end justify-around gap-2">
-                {weeklyData.slice().reverse().map((week) => {
+                {completedWeeks.slice().reverse().map((week) => {
                   const height = week.vo2_max ? ((week.vo2_max - 40) / 30) * 100 : 0;
                   return (
                     <div key={week.id} className="flex-1 flex flex-col items-center max-w-16">
@@ -527,11 +785,44 @@ export default function SpeedAndFormPlatform() {
                   );
                 })}
               </div>
+              <div className="mt-4 text-sm text-gray-400">
+                12-Week Average: {(completedWeeks.reduce((sum, w) => sum + (w.vo2_max || 0), 0) / completedWeeks.length).toFixed(1)}
+              </div>
             </div>
           )}
 
           <div className="space-y-3">
-            {weeklyData.map(week => (
+            {activeWeek && (
+              <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-purple-500/50 rounded-xl overflow-hidden">
+                <button
+                  onClick={() => setNavView('current')}
+                  className="w-full p-4 flex items-center justify-between hover:bg-white/5 transition-colors"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500/20 to-pink-500/20 flex items-center justify-center border border-purple-500/30">
+                      <span className="text-lg font-light">{activeWeek.week_num}</span>
+                    </div>
+                    <div className="text-left">
+                      <div className="text-sm font-medium flex items-center gap-2">
+                        Week {activeWeek.week_num}
+                        <span className="px-2 py-0.5 bg-green-500/20 text-green-400 text-xs rounded-full">ACTIVE</span>
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {activeWeek.date_start} - {activeWeek.date_end}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <div className="text-sm text-purple-400">{activeWeek.vo2_max || '-'} VO2</div>
+                      <div className="text-xs text-gray-500">{activeWeek.total_volume || 0}mi</div>
+                    </div>
+                  </div>
+                </button>
+              </div>
+            )}
+
+            {completedWeeks.map(week => (
               <div 
                 key={week.id}
                 className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-xl overflow-hidden"
@@ -541,12 +832,14 @@ export default function SpeedAndFormPlatform() {
                   className="w-full p-4 flex items-center justify-between hover:bg-white/5 transition-colors"
                 >
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500/20 to-pink-500/20 flex items-center justify-center border border-purple-500/30">
+                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-slate-500/20 to-slate-600/20 flex items-center justify-center border border-slate-500/30">
                       <span className="text-lg font-light">{week.week_num}</span>
                     </div>
                     <div className="text-left">
                       <div className="text-sm font-medium">Week {week.week_num}</div>
-                      <div className="text-xs text-gray-500">{week.date || 'No date'}</div>
+                      <div className="text-xs text-gray-500">
+                        {week.date_start} - {week.date_end}
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
@@ -565,122 +858,70 @@ export default function SpeedAndFormPlatform() {
 
                 {expandedWeek === week.id && (
                   <div className="px-4 pb-4 border-t border-slate-800">
-                    <div className="flex justify-end gap-2 mt-3 mb-2">
-                      <button
-                        onClick={() => setEditingWeek(week.id)}
-                        className="px-3 py-1 bg-purple-500/20 text-purple-400 rounded-lg text-xs font-medium hover:bg-purple-500/30 transition-colors flex items-center gap-1"
-                      >
-                        <Edit2 size={12} />
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => deleteWeek(week.id)}
-                        className="px-3 py-1 bg-red-500/20 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/30 transition-colors"
-                      >
-                        Delete
-                      </button>
+                    <div className="mt-4">
+                      <div className="text-xs text-gray-400 uppercase tracking-wider mb-3">Metrics</div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="bg-white/5 rounded-lg p-3">
+                          <div className="text-xs text-gray-500 mb-1">VO2</div>
+                          <div className="text-lg font-light">{week.vo2_max || '-'}</div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-3">
+                          <div className="text-xs text-gray-500 mb-1">HR</div>
+                          <div className="text-lg font-light">{week.resting_hr || '-'}</div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-3">
+                          <div className="text-xs text-gray-500 mb-1">HRV</div>
+                          <div className="text-lg font-light">{week.hrv || '-'}</div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-3">
+                          <div className="text-xs text-gray-500 mb-1">Weight</div>
+                          <div className="text-lg font-light">{week.weight || '-'}</div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-3">
+                          <div className="text-xs text-gray-500 mb-1">Sleep</div>
+                          <div className="text-lg font-light">{week.sleep_quality || '-'}/10</div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-3">
+                          <div className="text-xs text-gray-500 mb-1">Volume</div>
+                          <div className="text-lg font-light">{week.total_volume || 0}mi</div>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3 mt-4">
-                      <div className="bg-white/5 rounded-lg p-3">
-                        <div className="text-xs text-gray-500 mb-1">VO2 Max</div>
-                        {editingWeek === week.id ? (
-                          <input
-                            type="number"
-                            value={week.vo2_max || ''}
-                            onChange={(e) => updateField(week.id, 'vo2_max', e.target.value)}
-                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
-                          />
-                        ) : (
-                          <div className="text-lg font-light">{week.vo2_max || '-'}</div>
-                        )}
+                    {(week.threshold_distance || week.long_run_distance || week.vo2_workout) && (
+                      <div className="mt-4">
+                        <div className="text-xs text-gray-400 uppercase tracking-wider mb-3">Key Sessions</div>
+                        <div className="space-y-2 text-sm text-gray-300">
+                          {week.threshold_distance && (
+                            <div>• Threshold: {week.threshold_distance}mi @ {week.threshold_pace || '-'} ({week.threshold_hr || '-'}bpm)</div>
+                          )}
+                          {week.long_run_distance && (
+                            <div>• Long Run: {week.long_run_distance}mi @ {week.long_run_pace || '-'} ({week.long_run_hr || '-'}bpm)</div>
+                          )}
+                          {week.vo2_workout && (
+                            <div>• VO2: {week.vo2_workout} @ {week.vo2_pace || '-'} ({week.vo2_hr || '-'}bpm)</div>
+                          )}
+                        </div>
                       </div>
-                      <div className="bg-white/5 rounded-lg p-3">
-                        <div className="text-xs text-gray-500 mb-1">Total Volume</div>
-                        {editingWeek === week.id ? (
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={week.total_volume || ''}
-                            onChange={(e) => updateField(week.id, 'total_volume', e.target.value)}
-                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
-                          />
-                        ) : (
-                          <div className="text-lg font-light">{week.total_volume || '-'} mi</div>
-                        )}
-                      </div>
-                      <div className="bg-white/5 rounded-lg p-3">
-                        <div className="text-xs text-gray-500 mb-1">Resting HR</div>
-                        {editingWeek === week.id ? (
-                          <input
-                            type="number"
-                            value={week.resting_hr || ''}
-                            onChange={(e) => updateField(week.id, 'resting_hr', e.target.value)}
-                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
-                          />
-                        ) : (
-                          <div className="text-lg font-light">{week.resting_hr || '-'}</div>
-                        )}
-                      </div>
-                      <div className="bg-white/5 rounded-lg p-3">
-                        <div className="text-xs text-gray-500 mb-1">HRV</div>
-                        {editingWeek === week.id ? (
-                          <input
-                            type="number"
-                            value={week.hrv || ''}
-                            onChange={(e) => updateField(week.id, 'hrv', e.target.value)}
-                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
-                          />
-                        ) : (
-                          <div className="text-lg font-light">{week.hrv || '-'}</div>
-                        )}
-                      </div>
-                      <div className="bg-white/5 rounded-lg p-3">
-                        <div className="text-xs text-gray-500 mb-1">Weight</div>
-                        {editingWeek === week.id ? (
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={week.weight || ''}
-                            onChange={(e) => updateField(week.id, 'weight', e.target.value)}
-                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
-                          />
-                        ) : (
-                          <div className="text-lg font-light">{week.weight || '-'}</div>
-                        )}
-                      </div>
-                      <div className="bg-white/5 rounded-lg p-3">
-                        <div className="text-xs text-gray-500 mb-1">Sleep</div>
-                        {editingWeek === week.id ? (
-                          <input
-                            type="number"
-                            min="1"
-                            max="10"
-                            value={week.sleep_quality || ''}
-                            onChange={(e) => updateField(week.id, 'sleep_quality', e.target.value)}
-                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
-                          />
-                        ) : (
-                          <div className="text-lg font-light">{week.sleep_quality || '-'}/10</div>
-                        )}
-                      </div>
-                    </div>
-                    
-                    {editingWeek === week.id && (
-                      <button
-                        onClick={() => setEditingWeek(null)}
-                        className="w-full mt-3 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg text-sm font-medium hover:shadow-lg hover:shadow-purple-500/50 transition-all"
-                      >
-                        Done Editing
-                      </button>
                     )}
 
-                    {week.weekly_observations && (
-                      <div className="mt-3">
-                        <div className="text-xs text-gray-500 mb-2">OBSERVATIONS</div>
+                    {week.weekly_notes && (
+                      <div className="mt-4">
+                        <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Notes</div>
                         <div className="text-sm text-gray-300 bg-white/5 rounded-lg p-3">
-                          {week.weekly_observations}
+                          {week.weekly_notes}
                         </div>
+                      </div>
+                    )}
+
+                    {canEdit && (
+                      <div className="flex gap-2 mt-4">
+                        <button
+                          onClick={() => deleteWeek(week.id)}
+                          className="px-3 py-1 bg-red-500/20 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/30 transition-colors"
+                        >
+                          Delete
+                        </button>
                       </div>
                     )}
                   </div>
@@ -694,8 +935,8 @@ export default function SpeedAndFormPlatform() {
     );
   }
 
-  // Profile View
-  if (navView === 'profile') {
+  // More/Settings View
+  if (navView === 'more') {
     const [editProfile, setEditProfile] = useState({
       age: selectedAthlete?.age || '',
       starting_weight: selectedAthlete?.starting_weight || '',
@@ -706,99 +947,141 @@ export default function SpeedAndFormPlatform() {
       hrv_baseline_high: selectedAthlete?.hrv_baseline_high || ''
     });
 
+    const [isEditingProfile, setIsEditingProfile] = useState(false);
+
     return (
       <div className="min-h-screen bg-gradient-to-b from-slate-950 via-purple-950/20 to-slate-950 text-white p-4 pb-24">
         <div className="max-w-2xl mx-auto">
-          <h1 className="text-2xl font-light mb-6">Edit Profile</h1>
+          <h1 className="text-2xl font-light mb-6">Settings</h1>
 
-          <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">Age</label>
-                <input
-                  type="number"
-                  value={editProfile.age}
-                  onChange={(e) => setEditProfile({...editProfile, age: e.target.value})}
-                  className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white"
-                />
+          <div className="space-y-4">
+            <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-medium uppercase tracking-wider">Profile</h3>
+                <button
+                  onClick={() => setIsEditingProfile(!isEditingProfile)}
+                  className="text-purple-400 text-sm flex items-center gap-1"
+                >
+                  <Edit2 size={14} />
+                  {isEditingProfile ? 'Cancel' : 'Edit'}
+                </button>
               </div>
-              <div>
-                <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">Weight (lbs)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={editProfile.starting_weight}
-                  onChange={(e) => setEditProfile({...editProfile, starting_weight: e.target.value})}
-                  className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white"
-                />
-              </div>
+
+              {isEditingProfile ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-2">Age</label>
+                      <input
+                        type="number"
+                        value={editProfile.age}
+                        onChange={(e) => setEditProfile({...editProfile, age: e.target.value})}
+                        className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-2">Weight (lbs)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={editProfile.starting_weight}
+                        onChange={(e) => setEditProfile({...editProfile, starting_weight: e.target.value})}
+                        className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-2">Baseline VO2</label>
+                      <input
+                        type="number"
+                        value={editProfile.baseline_vo2}
+                        onChange={(e) => setEditProfile({...editProfile, baseline_vo2: e.target.value})}
+                        className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-2">Target VO2</label>
+                      <input
+                        type="number"
+                        value={editProfile.target_vo2}
+                        onChange={(e) => setEditProfile({...editProfile, target_vo2: e.target.value})}
+                        className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-2">HRV Low</label>
+                      <input
+                        type="number"
+                        value={editProfile.hrv_baseline_low}
+                        onChange={(e) => setEditProfile({...editProfile, hrv_baseline_low: e.target.value})}
+                        className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-2">HRV High</label>
+                      <input
+                        type="number"
+                        value={editProfile.hrv_baseline_high}
+                        onChange={(e) => setEditProfile({...editProfile, hrv_baseline_high: e.target.value})}
+                        className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      saveProfile(editProfile);
+                      setIsEditingProfile(false);
+                    }}
+                    className="w-full py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-medium hover:shadow-lg hover:shadow-purple-500/50 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Check size={18} />
+                    Save Changes
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Age:</span>
+                    <span>{selectedAthlete?.age}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Starting Weight:</span>
+                    <span>{selectedAthlete?.starting_weight} lbs</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Baseline VO2:</span>
+                    <span>{selectedAthlete?.baseline_vo2}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Target VO2:</span>
+                    <span>{selectedAthlete?.target_vo2}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">HRV Range:</span>
+                    <span>{selectedAthlete?.hrv_baseline_low}-{selectedAthlete?.hrv_baseline_high}</span>
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div>
-              <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">VO2 Max Journey</label>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="text-xs text-gray-600 mb-1">Baseline</div>
-                  <input
-                    type="number"
-                    value={editProfile.baseline_vo2}
-                    onChange={(e) => setEditProfile({...editProfile, baseline_vo2: e.target.value})}
-                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white"
-                  />
-                </div>
-                <div>
-                  <div className="text-xs text-gray-600 mb-1">Target</div>
-                  <input
-                    type="number"
-                    value={editProfile.target_vo2}
-                    onChange={(e) => setEditProfile({...editProfile, target_vo2: e.target.value})}
-                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white"
-                  />
-                </div>
+            <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6">
+              <h3 className="text-sm font-medium uppercase tracking-wider mb-4">About</h3>
+              <div className="text-sm text-gray-400">
+                Speed & Form v1.0.0
               </div>
-            </div>
-
-            <div>
-              <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">HRV Balanced Range</label>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="text-xs text-gray-600 mb-1">Low</div>
-                  <input
-                    type="number"
-                    value={editProfile.hrv_baseline_low}
-                    onChange={(e) => setEditProfile({...editProfile, hrv_baseline_low: e.target.value})}
-                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white"
-                  />
-                </div>
-                <div>
-                  <div className="text-xs text-gray-600 mb-1">High</div>
-                  <input
-                    type="number"
-                    value={editProfile.hrv_baseline_high}
-                    onChange={(e) => setEditProfile({...editProfile, hrv_baseline_high: e.target.value})}
-                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">Baseline Weekly Miles</label>
-              <input
-                type="number"
-                step="0.1"
-                value={editProfile.baseline_weekly_miles}
-                onChange={(e) => setEditProfile({...editProfile, baseline_weekly_miles: e.target.value})}
-                className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white"
-              />
             </div>
 
             <button
-              onClick={() => saveProfile(editProfile)}
-              className="w-full py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-medium uppercase tracking-wider hover:shadow-lg hover:shadow-purple-500/50 transition-all flex items-center justify-center gap-2"
+              onClick={logout}
+              className="w-full py-3 bg-red-500/20 text-red-400 rounded-xl font-medium hover:bg-red-500/30 transition-all"
             >
-              <Check size={18} />
-              Save Changes
+              Logout
             </button>
           </div>
         </div>
@@ -807,29 +1090,47 @@ export default function SpeedAndFormPlatform() {
     );
   }
 
-  // Main current week view
-  const lastWeek = weeklyData[1];
-  const hrvStatus = getHrvStatus(
-    currentWeek?.hrv,
-    selectedAthlete?.hrv_baseline_low,
-    selectedAthlete?.hrv_baseline_high
-  );
+  // Main Current Week View
+  if (!activeWeek) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-purple-950/20 to-slate-950 text-white flex items-center justify-center p-4">
+        <div className="text-center">
+          <div className="text-gray-500 mb-4">Loading...</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-purple-950/20 to-slate-950 text-white p-4 pb-32">
       <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="mb-6">
-          <h1 className="text-3xl font-light">WEEK {currentWeek?.week_num || 1}</h1>
-          <p className="text-gray-500 text-sm">{currentWeek?.date || new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</p>
+          <div className="flex items-center gap-3 mb-2">
+            <h1 className="text-3xl font-light">WEEK {activeWeek.week_num}</h1>
+            <span className="px-3 py-1 bg-green-500/20 text-green-400 text-xs rounded-full uppercase tracking-wider">
+              Active
+            </span>
+          </div>
+          <p className="text-gray-500 text-sm">
+            {activeWeek.date_start} - {activeWeek.date_end}
+          </p>
         </div>
 
         {/* VO2 Progress Card */}
         <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 mb-6">
+          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">VO2 MAX PROGRESS</h3>
+          
           <div className="flex items-start justify-between mb-6">
             <div>
-              <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">VO2 MAX PROGRESS</h3>
-              <div className="text-5xl font-light">{currentWeek?.vo2_max || selectedAthlete?.baseline_vo2 || '-'}</div>
+              <div className="text-5xl font-light mb-2">{activeWeek.vo2_max || selectedAthlete?.baseline_vo2 || '-'}</div>
+              <div className="text-sm text-purple-400">{progress}% Progress</div>
+              <div className="flex items-center gap-2 mt-2">
+                <div className="text-xs text-gray-500">
+                  {selectedAthlete?.baseline_vo2} → {selectedAthlete?.target_vo2}
+                </div>
+                <Sparkline data={weeklyData.slice(0, 8).reverse()} />
+              </div>
             </div>
             <div className="relative w-20 h-20">
               <svg className="transform -rotate-90 w-20 h-20">
@@ -863,8 +1164,8 @@ export default function SpeedAndFormPlatform() {
               <input
                 type="number"
                 step="0.1"
-                value={currentWeek?.total_volume || 0}
-                onChange={(e) => canEdit && updateField(currentWeek?.id, 'total_volume', e.target.value)}
+                value={activeWeek.total_volume || ''}
+                onChange={(e) => canEdit && updateField(activeWeek.id, 'total_volume', e.target.value)}
                 disabled={!canEdit}
                 className="w-full bg-transparent text-2xl font-light text-white border-none outline-none"
                 placeholder="0"
@@ -881,26 +1182,23 @@ export default function SpeedAndFormPlatform() {
 
         {/* Sunday Check-in */}
         <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 mb-6">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-sm font-medium uppercase tracking-wider">SUNDAY CHECK-IN</h3>
-            <ChevronDown size={20} className="text-gray-500" />
-          </div>
+          <h3 className="text-sm font-medium uppercase tracking-wider mb-6">SUNDAY CHECK-IN</h3>
 
           {/* VO2 Max Slider */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2 text-sm text-gray-400">
                 <TrendingUp size={16} />
-                <span>VO2 MAX</span>
+                <span>VO2 MAX *</span>
               </div>
-              <span className="text-2xl font-light">{currentWeek?.vo2_max || '-'}</span>
+              <span className="text-2xl font-light">{activeWeek.vo2_max || '-'}</span>
             </div>
             <input
               type="range"
               min="40"
               max="70"
-              value={currentWeek?.vo2_max || 50}
-              onChange={(e) => canEdit && updateField(currentWeek?.id, 'vo2_max', e.target.value)}
+              value={activeWeek.vo2_max || 50}
+              onChange={(e) => canEdit && updateField(activeWeek.id, 'vo2_max', e.target.value)}
               disabled={!canEdit}
               className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer slider-purple"
             />
@@ -916,16 +1214,16 @@ export default function SpeedAndFormPlatform() {
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2 text-sm text-gray-400">
                 <Heart size={16} />
-                <span>RESTING HR</span>
+                <span>RESTING HR *</span>
               </div>
-              <span className="text-2xl font-light">{currentWeek?.resting_hr || '-'}</span>
+              <span className="text-2xl font-light">{activeWeek.resting_hr || '-'}</span>
             </div>
             <input
               type="range"
               min="40"
               max="80"
-              value={currentWeek?.resting_hr || 60}
-              onChange={(e) => canEdit && updateField(currentWeek?.id, 'resting_hr', e.target.value)}
+              value={activeWeek.resting_hr || 60}
+              onChange={(e) => canEdit && updateField(activeWeek.id, 'resting_hr', e.target.value)}
               disabled={!canEdit}
               className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer slider-purple"
             />
@@ -944,7 +1242,7 @@ export default function SpeedAndFormPlatform() {
                 <span>HRV</span>
               </div>
               <div className="text-right">
-                <div className="text-2xl font-light">{currentWeek?.hrv || '-'}</div>
+                <div className="text-2xl font-light">{activeWeek.hrv || '-'}</div>
                 <div className={`text-xs ${hrvStatus.color}`}>{hrvStatus.text}</div>
               </div>
             </div>
@@ -952,14 +1250,14 @@ export default function SpeedAndFormPlatform() {
               type="range"
               min="30"
               max="100"
-              value={currentWeek?.hrv || 65}
-              onChange={(e) => canEdit && updateField(currentWeek?.id, 'hrv', e.target.value)}
+              value={activeWeek.hrv || 65}
+              onChange={(e) => canEdit && updateField(activeWeek.id, 'hrv', e.target.value)}
               disabled={!canEdit}
               className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer slider-purple"
             />
             <div className="flex justify-between text-xs text-gray-600 mt-1">
               <span>30</span>
-              <span className="text-purple-400">Range: {selectedAthlete?.hrv_baseline_low || '-'}-{selectedAthlete?.hrv_baseline_high || '-'}</span>
+              <span className="text-purple-400">Range: {selectedAthlete?.hrv_baseline_low}-{selectedAthlete?.hrv_baseline_high}</span>
               <span>100</span>
             </div>
           </div>
@@ -971,14 +1269,14 @@ export default function SpeedAndFormPlatform() {
                 <TrendingUp size={16} />
                 <span>WEIGHT (LBS)</span>
               </div>
-              <span className="text-2xl font-light">{currentWeek?.weight || '-'}</span>
+              <span className="text-2xl font-light">{activeWeek.weight || '-'}</span>
             </div>
             <input
               type="range"
               min="120"
               max="220"
-              value={currentWeek?.weight || selectedAthlete?.starting_weight || 165}
-              onChange={(e) => canEdit && updateField(currentWeek?.id, 'weight', e.target.value)}
+              value={activeWeek.weight || selectedAthlete?.starting_weight || 165}
+              onChange={(e) => canEdit && updateField(activeWeek.id, 'weight', e.target.value)}
               disabled={!canEdit}
               className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer slider-purple"
             />
@@ -996,14 +1294,14 @@ export default function SpeedAndFormPlatform() {
                 <Activity size={16} />
                 <span>SLEEP QUALITY</span>
               </div>
-              <span className="text-2xl font-light">{currentWeek?.sleep_quality || '-'}/10</span>
+              <span className="text-2xl font-light">{activeWeek.sleep_quality || '-'}/10</span>
             </div>
             <input
               type="range"
               min="1"
               max="10"
-              value={currentWeek?.sleep_quality || 7}
-              onChange={(e) => canEdit && updateField(currentWeek?.id, 'sleep_quality', e.target.value)}
+              value={activeWeek.sleep_quality || 7}
+              onChange={(e) => canEdit && updateField(activeWeek.id, 'sleep_quality', e.target.value)}
               disabled={!canEdit}
               className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer slider-purple"
             />
@@ -1013,43 +1311,192 @@ export default function SpeedAndFormPlatform() {
               <span>Great</span>
             </div>
           </div>
+
+          <div className="text-xs text-gray-500 mt-4">* Required to complete week</div>
         </div>
 
         {/* Key Sessions */}
         <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-medium uppercase tracking-wider">KEY SESSIONS</h3>
-            <button className="text-purple-400 text-sm">Edit</button>
-          </div>
+          <h3 className="text-sm font-medium uppercase tracking-wider mb-4">KEY SESSIONS</h3>
 
-          <div className="space-y-4">
-            <div className="bg-white/5 rounded-lg p-4">
-              <div className="text-xs text-gray-500 mb-2 uppercase tracking-wider">Threshold</div>
-              <div className="text-sm">6.2mi • 7:15/mi • 165 HR</div>
+          <div className="space-y-6">
+            {/* Threshold Run */}
+            <div className="border-l-2 border-purple-500 pl-4">
+              <div className="text-xs text-gray-400 uppercase tracking-wider mb-3">🏃 Threshold Run</div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Distance (mi)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={activeWeek.threshold_distance || ''}
+                    onChange={(e) => canEdit && updateField(activeWeek.id, 'threshold_distance', e.target.value)}
+                    disabled={!canEdit}
+                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                    placeholder="6.2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Pace (/mi)</label>
+                  <input
+                    type="text"
+                    value={activeWeek.threshold_pace || ''}
+                    onChange={(e) => canEdit && updateField(activeWeek.id, 'threshold_pace', e.target.value)}
+                    disabled={!canEdit}
+                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                    placeholder="7:15"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Avg HR</label>
+                  <input
+                    type="number"
+                    value={activeWeek.threshold_hr || ''}
+                    onChange={(e) => canEdit && updateField(activeWeek.id, 'threshold_hr', e.target.value)}
+                    disabled={!canEdit}
+                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                    placeholder="165"
+                  />
+                </div>
+              </div>
             </div>
 
-            <div className="bg-white/5 rounded-lg p-4">
-              <div className="text-xs text-gray-500 mb-2 uppercase tracking-wider">Long Run</div>
-              <div className="text-sm">90min • 12mi • 7:30/mi • 152 HR</div>
+            {/* Long Run */}
+            <div className="border-l-2 border-pink-500 pl-4">
+              <div className="text-xs text-gray-400 uppercase tracking-wider mb-3">🏃‍♂️ Long Run</div>
+              <div className="grid grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Duration (min)</label>
+                  <input
+                    type="number"
+                    value={activeWeek.long_run_duration || ''}
+                    onChange={(e) => canEdit && updateField(activeWeek.id, 'long_run_duration', e.target.value)}
+                    disabled={!canEdit}
+                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                    placeholder="90"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Distance (mi)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={activeWeek.long_run_distance || ''}
+                    onChange={(e) => canEdit && updateField(activeWeek.id, 'long_run_distance', e.target.value)}
+                    disabled={!canEdit}
+                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                    placeholder="12"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Pace (/mi)</label>
+                  <input
+                    type="text"
+                    value={activeWeek.long_run_pace || ''}
+                    onChange={(e) => canEdit && updateField(activeWeek.id, 'long_run_pace', e.target.value)}
+                    disabled={!canEdit}
+                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                    placeholder="7:30"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Avg HR</label>
+                  <input
+                    type="number"
+                    value={activeWeek.long_run_hr || ''}
+                    onChange={(e) => canEdit && updateField(activeWeek.id, 'long_run_hr', e.target.value)}
+                    disabled={!canEdit}
+                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                    placeholder="152"
+                  />
+                </div>
+              </div>
             </div>
 
-            <div className="bg-white/5 rounded-lg p-4">
-              <div className="text-xs text-gray-500 mb-2 uppercase tracking-wider">Speed/VO2</div>
-              <div className="text-sm">6x800m • 5:45/mi • 178 HR • Rec: 145</div>
+            {/* VO2 Max Session */}
+            <div className="border-l-2 border-blue-500 pl-4">
+              <div className="text-xs text-gray-400 uppercase tracking-wider mb-3">⚡ VO2 MAX / SPEED</div>
+              <div className="grid grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Workout</label>
+                  <input
+                    type="text"
+                    value={activeWeek.vo2_workout || ''}
+                    onChange={(e) => canEdit && updateField(activeWeek.id, 'vo2_workout', e.target.value)}
+                    disabled={!canEdit}
+                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                    placeholder="6x800m"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Pace (/mi)</label>
+                  <input
+                    type="text"
+                    value={activeWeek.vo2_pace || ''}
+                    onChange={(e) => canEdit && updateField(activeWeek.id, 'vo2_pace', e.target.value)}
+                    disabled={!canEdit}
+                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                    placeholder="5:45"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Avg HR</label>
+                  <input
+                    type="number"
+                    value={activeWeek.vo2_hr || ''}
+                    onChange={(e) => canEdit && updateField(activeWeek.id, 'vo2_hr', e.target.value)}
+                    disabled={!canEdit}
+                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                    placeholder="178"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Recovery HR</label>
+                  <input
+                    type="number"
+                    value={activeWeek.vo2_recovery_hr || ''}
+                    onChange={(e) => canEdit && updateField(activeWeek.id, 'vo2_recovery_hr', e.target.value)}
+                    disabled={!canEdit}
+                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
+                    placeholder="145"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Save Week Button */}
+        {/* Weekly Notes */}
+        <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 mb-6">
+          <h3 className="text-sm font-medium uppercase tracking-wider mb-4">WEEKLY NOTES</h3>
+          <textarea
+            value={activeWeek.weekly_notes || ''}
+            onChange={(e) => canEdit && updateField(activeWeek.id, 'weekly_notes', e.target.value)}
+            disabled={!canEdit}
+            className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-3 text-white text-sm min-h-24 resize-none"
+            placeholder="How did you feel this week? Any observations or achievements..."
+          />
+        </div>
+
+        {/* Error Message */}
+        {error && (
+          <div className="mb-4 p-3 bg-red-900/20 border border-red-900 rounded-lg text-sm text-red-400">
+            {error}
+          </div>
+        )}
+
+        {/* Complete Week Button */}
         <button
-          onClick={() => addWeek()}
-          className="w-full py-4 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-2xl font-medium uppercase tracking-wider hover:shadow-lg hover:shadow-purple-500/50 transition-all mb-6"
+          onClick={handleCompleteWeek}
+          className="w-full py-4 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-2xl font-medium uppercase tracking-wider hover:shadow-lg hover:shadow-purple-500/50 transition-all mb-6 flex items-center justify-center gap-2"
         >
-          + NEW WEEK
+          <Check size={20} />
+          COMPLETE WEEK
         </button>
       </div>
 
       <BottomNav />
+      <CompleteWeekModal />
 
       <style jsx>{`
         .slider-purple::-webkit-slider-thumb {
