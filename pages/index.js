@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, Activity, Heart, Settings, Calendar, Home, LogOut, ChevronDown, X, Check, Upload } from 'lucide-react';
+import { TrendingUp, Activity, Heart, Settings, Calendar, Home, LogOut, ChevronDown, X, Check, Upload, Edit2 } from 'lucide-react';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_KEY;
@@ -28,6 +28,7 @@ export default function SpeedAndFormPlatform() {
   const [selectedAthlete, setSelectedAthlete] = useState(null);
   const [weeklyData, setWeeklyData] = useState([]);
   const [expandedWeek, setExpandedWeek] = useState(null);
+  const [editingWeek, setEditingWeek] = useState(null);
   const [loading, setLoading] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -109,6 +110,7 @@ export default function SpeedAndFormPlatform() {
     setView('login');
     setEmail('');
     setPassword('');
+    setNavView('current');
   };
 
   const loadAthletes = async () => {
@@ -119,6 +121,11 @@ export default function SpeedAndFormPlatform() {
   const loadAthleteData = async (athleteId) => {
     const data = await api.fetch(`weekly_data?athlete_id=eq.${athleteId}&select=*&order=week_num.desc`);
     setWeeklyData(data || []);
+    
+    // Auto-create Week 1 if no data exists
+    if (!data || data.length === 0) {
+      await addWeek(athleteId);
+    }
   };
 
   const selectAthlete = async (athlete) => {
@@ -128,6 +135,7 @@ export default function SpeedAndFormPlatform() {
     } else {
       await loadAthleteData(athlete.id);
       setView('athlete-portal');
+      setNavView('current');
     }
   };
 
@@ -140,19 +148,21 @@ export default function SpeedAndFormPlatform() {
       
       setSelectedAthlete({ ...selectedAthlete, ...profileData });
       await loadAthleteData(selectedAthlete.id);
-      setView(currentUser.role === 'coach' ? 'athlete-detail' : 'athlete-portal');
+      setView('athlete-portal');
       setNavView('current');
     } catch (error) {
       console.error('Error saving profile:', error);
     }
   };
 
-  const addWeek = async () => {
+  const addWeek = async (athleteId = null) => {
+    const targetAthleteId = athleteId || selectedAthlete.id;
     const lastWeek = weeklyData[0];
     const newWeek = {
-      athlete_id: selectedAthlete.id,
+      athlete_id: targetAthleteId,
       week_num: lastWeek ? lastWeek.week_num + 1 : 1,
-      date: new Date().toISOString().split('T')[0]
+      date: new Date().toISOString().split('T')[0],
+      total_volume: 0
     };
 
     const inserted = await api.fetch('weekly_data', {
@@ -172,6 +182,17 @@ export default function SpeedAndFormPlatform() {
     });
     setWeeklyData(weeklyData.map(w => w.id === weekId ? { ...w, [field]: value } : w));
   };
+
+  const deleteWeek = async (weekId) => {
+    if (confirm('Are you sure you want to delete this week?')) {
+      await api.fetch(`weekly_data?id=eq.${weekId}`, {
+        method: 'DELETE'
+      });
+      setWeeklyData(weeklyData.filter(w => w.id !== weekId));
+      setEditingWeek(null);
+    }
+  };
+
   const ProfileSetup = () => {
     const [profile, setProfile] = useState({
       age: selectedAthlete.age || '',
@@ -416,10 +437,15 @@ export default function SpeedAndFormPlatform() {
       </div>
     );
   }
-const isCoach = currentUser?.role === 'coach';
+
+  // Helper functions and navigation for athlete portal
+  const isCoach = currentUser?.role === 'coach';
   const canEdit = isCoach || (currentUser?.athlete_id === selectedAthlete?.id);
-  const progress = selectedAthlete?.baseline_vo2 && selectedAthlete?.target_vo2
-    ? ((selectedAthlete.baseline_vo2 - selectedAthlete.baseline_vo2) / (selectedAthlete.target_vo2 - selectedAthlete.baseline_vo2) * 100).toFixed(1)
+  
+  // FIXED: Use current week's VO2 for progress calculation
+  const currentWeek = weeklyData[0];
+  const progress = selectedAthlete?.baseline_vo2 && selectedAthlete?.target_vo2 && currentWeek?.vo2_max
+    ? ((currentWeek.vo2_max - selectedAthlete.baseline_vo2) / (selectedAthlete.target_vo2 - selectedAthlete.baseline_vo2) * 100).toFixed(1)
     : 0;
 
   const getHrvStatus = (hrv, low, high) => {
@@ -429,7 +455,7 @@ const isCoach = currentUser?.role === 'coach';
   };
 
   const BottomNav = () => (
-    <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-slate-950 to-slate-950/95 backdrop-blur-xl border-t border-slate-800 z-50">
+    <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-slate-950 to-slate-950/95 backdrop-blur-xl border-t border-slate-800 z-[9999]">
       <div className="max-w-3xl mx-auto px-4 py-3 flex justify-around items-center">
         <button
           onClick={() => setNavView('current')}
@@ -469,11 +495,20 @@ const isCoach = currentUser?.role === 'coach';
     </div>
   );
 
+  // Library View with Edit Capability
   if (navView === 'library') {
     return (
       <div className="min-h-screen bg-gradient-to-b from-slate-950 via-purple-950/20 to-slate-950 text-white p-4 pb-24">
         <div className="max-w-3xl mx-auto">
-          <h1 className="text-2xl font-light mb-6">Week Library</h1>
+          <div className="flex items-center justify-between mb-6">
+            <h1 className="text-2xl font-light">Week Library</h1>
+            <button
+              onClick={() => addWeek()}
+              className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg text-sm font-medium hover:shadow-lg hover:shadow-purple-500/50 transition-all"
+            >
+              + New Week
+            </button>
+          </div>
 
           {weeklyData.length > 0 && (
             <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 mb-6">
@@ -530,24 +565,116 @@ const isCoach = currentUser?.role === 'coach';
 
                 {expandedWeek === week.id && (
                   <div className="px-4 pb-4 border-t border-slate-800">
+                    <div className="flex justify-end gap-2 mt-3 mb-2">
+                      <button
+                        onClick={() => setEditingWeek(week.id)}
+                        className="px-3 py-1 bg-purple-500/20 text-purple-400 rounded-lg text-xs font-medium hover:bg-purple-500/30 transition-colors flex items-center gap-1"
+                      >
+                        <Edit2 size={12} />
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => deleteWeek(week.id)}
+                        className="px-3 py-1 bg-red-500/20 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/30 transition-colors"
+                      >
+                        Delete
+                      </button>
+                    </div>
+
                     <div className="grid grid-cols-2 gap-3 mt-4">
                       <div className="bg-white/5 rounded-lg p-3">
+                        <div className="text-xs text-gray-500 mb-1">VO2 Max</div>
+                        {editingWeek === week.id ? (
+                          <input
+                            type="number"
+                            value={week.vo2_max || ''}
+                            onChange={(e) => updateField(week.id, 'vo2_max', e.target.value)}
+                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
+                          />
+                        ) : (
+                          <div className="text-lg font-light">{week.vo2_max || '-'}</div>
+                        )}
+                      </div>
+                      <div className="bg-white/5 rounded-lg p-3">
+                        <div className="text-xs text-gray-500 mb-1">Total Volume</div>
+                        {editingWeek === week.id ? (
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={week.total_volume || ''}
+                            onChange={(e) => updateField(week.id, 'total_volume', e.target.value)}
+                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
+                          />
+                        ) : (
+                          <div className="text-lg font-light">{week.total_volume || '-'} mi</div>
+                        )}
+                      </div>
+                      <div className="bg-white/5 rounded-lg p-3">
                         <div className="text-xs text-gray-500 mb-1">Resting HR</div>
-                        <div className="text-lg font-light">{week.resting_hr || '-'}</div>
+                        {editingWeek === week.id ? (
+                          <input
+                            type="number"
+                            value={week.resting_hr || ''}
+                            onChange={(e) => updateField(week.id, 'resting_hr', e.target.value)}
+                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
+                          />
+                        ) : (
+                          <div className="text-lg font-light">{week.resting_hr || '-'}</div>
+                        )}
                       </div>
                       <div className="bg-white/5 rounded-lg p-3">
                         <div className="text-xs text-gray-500 mb-1">HRV</div>
-                        <div className="text-lg font-light">{week.hrv || '-'}</div>
+                        {editingWeek === week.id ? (
+                          <input
+                            type="number"
+                            value={week.hrv || ''}
+                            onChange={(e) => updateField(week.id, 'hrv', e.target.value)}
+                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
+                          />
+                        ) : (
+                          <div className="text-lg font-light">{week.hrv || '-'}</div>
+                        )}
                       </div>
                       <div className="bg-white/5 rounded-lg p-3">
                         <div className="text-xs text-gray-500 mb-1">Weight</div>
-                        <div className="text-lg font-light">{week.weight || '-'}</div>
+                        {editingWeek === week.id ? (
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={week.weight || ''}
+                            onChange={(e) => updateField(week.id, 'weight', e.target.value)}
+                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
+                          />
+                        ) : (
+                          <div className="text-lg font-light">{week.weight || '-'}</div>
+                        )}
                       </div>
                       <div className="bg-white/5 rounded-lg p-3">
                         <div className="text-xs text-gray-500 mb-1">Sleep</div>
-                        <div className="text-lg font-light">{week.sleep_quality || '-'}/10</div>
+                        {editingWeek === week.id ? (
+                          <input
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={week.sleep_quality || ''}
+                            onChange={(e) => updateField(week.id, 'sleep_quality', e.target.value)}
+                            className="w-full bg-black/50 border border-white/10 rounded px-2 py-1 text-sm text-white"
+                          />
+                        ) : (
+                          <div className="text-lg font-light">{week.sleep_quality || '-'}/10</div>
+                        )}
                       </div>
                     </div>
+                    
+                    {editingWeek === week.id && (
+                      <button
+                        onClick={() => setEditingWeek(null)}
+                        className="w-full mt-3 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg text-sm font-medium hover:shadow-lg hover:shadow-purple-500/50 transition-all"
+                      >
+                        Done Editing
+                      </button>
+                    )}
+
                     {week.weekly_observations && (
                       <div className="mt-3">
                         <div className="text-xs text-gray-500 mb-2">OBSERVATIONS</div>
@@ -567,6 +694,7 @@ const isCoach = currentUser?.role === 'coach';
     );
   }
 
+  // Profile View
   if (navView === 'profile') {
     const [editProfile, setEditProfile] = useState({
       age: selectedAthlete?.age || '',
@@ -678,8 +806,8 @@ const isCoach = currentUser?.role === 'coach';
       </div>
     );
   }
-// Main current week view
-  const currentWeek = weeklyData[0];
+
+  // Main current week view
   const lastWeek = weeklyData[1];
   const hrvStatus = getHrvStatus(
     currentWeek?.hrv,
@@ -688,7 +816,7 @@ const isCoach = currentUser?.role === 'coach';
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-950 via-purple-950/20 to-slate-950 text-white p-4 pb-24">
+    <div className="min-h-screen bg-gradient-to-b from-slate-950 via-purple-950/20 to-slate-950 text-white p-4 pb-32">
       <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="mb-6">
@@ -732,7 +860,15 @@ const isCoach = currentUser?.role === 'coach';
           <div className="grid grid-cols-2 gap-3">
             <div className="bg-white/5 rounded-lg p-4">
               <div className="text-xs text-gray-500 mb-1">This Week</div>
-              <div className="text-2xl font-light">{currentWeek?.total_volume || 0}</div>
+              <input
+                type="number"
+                step="0.1"
+                value={currentWeek?.total_volume || 0}
+                onChange={(e) => canEdit && updateField(currentWeek?.id, 'total_volume', e.target.value)}
+                disabled={!canEdit}
+                className="w-full bg-transparent text-2xl font-light text-white border-none outline-none"
+                placeholder="0"
+              />
               <div className="text-xs text-gray-500">miles</div>
             </div>
             <div className="bg-white/5 rounded-lg p-4">
@@ -909,7 +1045,7 @@ const isCoach = currentUser?.role === 'coach';
           onClick={() => addWeek()}
           className="w-full py-4 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-2xl font-medium uppercase tracking-wider hover:shadow-lg hover:shadow-purple-500/50 transition-all mb-6"
         >
-          SAVE WEEK
+          + NEW WEEK
         </button>
       </div>
 
