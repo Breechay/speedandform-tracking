@@ -418,8 +418,8 @@ export default function SpeedAndFormPlatform() {
   }
 const isCoach = currentUser?.role === 'coach';
   const canEdit = isCoach || (currentUser?.athlete_id === selectedAthlete?.id);
-  const progress = selectedAthlete?.baseline_vo2 && selectedAthlete?.current_vo2 && selectedAthlete?.target_vo2
-    ? ((selectedAthlete.current_vo2 - selectedAthlete.baseline_vo2) / (selectedAthlete.target_vo2 - selectedAthlete.baseline_vo2) * 100).toFixed(1)
+  const progress = selectedAthlete?.baseline_vo2 && selectedAthlete?.target_vo2
+    ? ((selectedAthlete.baseline_vo2 - selectedAthlete.baseline_vo2) / (selectedAthlete.target_vo2 - selectedAthlete.baseline_vo2) * 100).toFixed(1)
     : 0;
 
   const getHrvStatus = (hrv, low, high) => {
@@ -429,7 +429,7 @@ const isCoach = currentUser?.role === 'coach';
   };
 
   const BottomNav = () => (
-    <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-slate-950 to-slate-950/95 backdrop-blur-xl border-t border-slate-800 pb-safe">
+    <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-slate-950 to-slate-950/95 backdrop-blur-xl border-t border-slate-800 z-50">
       <div className="max-w-3xl mx-auto px-4 py-3 flex justify-around items-center">
         <button
           onClick={() => setNavView('current')}
@@ -572,7 +572,6 @@ const isCoach = currentUser?.role === 'coach';
       age: selectedAthlete?.age || '',
       starting_weight: selectedAthlete?.starting_weight || '',
       baseline_vo2: selectedAthlete?.baseline_vo2 || '',
-      current_vo2: selectedAthlete?.current_vo2 || '',
       target_vo2: selectedAthlete?.target_vo2 || '',
       baseline_weekly_miles: selectedAthlete?.baseline_weekly_miles || '',
       hrv_baseline_low: selectedAthlete?.hrv_baseline_low || '',
@@ -609,22 +608,13 @@ const isCoach = currentUser?.role === 'coach';
 
             <div>
               <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">VO2 Max Journey</label>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <div className="text-xs text-gray-600 mb-1">Baseline</div>
                   <input
                     type="number"
                     value={editProfile.baseline_vo2}
                     onChange={(e) => setEditProfile({...editProfile, baseline_vo2: e.target.value})}
-                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white"
-                  />
-                </div>
-                <div>
-                  <div className="text-xs text-gray-600 mb-1">Current</div>
-                  <input
-                    type="number"
-                    value={editProfile.current_vo2}
-                    onChange={(e) => setEditProfile({...editProfile, current_vo2: e.target.value})}
                     className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-white"
                   />
                 </div>
@@ -688,137 +678,264 @@ const isCoach = currentUser?.role === 'coach';
       </div>
     );
   }
-
+// Main current week view
   const currentWeek = weeklyData[0];
+  const lastWeek = weeklyData[1];
+  const hrvStatus = getHrvStatus(
+    currentWeek?.hrv,
+    selectedAthlete?.hrv_baseline_low,
+    selectedAthlete?.hrv_baseline_high
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-purple-950/20 to-slate-950 text-white p-4 pb-24">
       <div className="max-w-3xl mx-auto">
+        {/* Header */}
         <div className="mb-6">
-          <h1 className="text-2xl font-light">{selectedAthlete?.name}</h1>
+          <h1 className="text-3xl font-light">WEEK {currentWeek?.week_num || 1}</h1>
+          <p className="text-gray-500 text-sm">{currentWeek?.date || new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</p>
         </div>
 
-        {!currentWeek ? (
-          <div className="text-center py-12">
-            <p className="text-gray-500 mb-4">No training data yet</p>
-            {canEdit && (
-              <button
-                onClick={addWeek}
-                className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl text-sm font-medium hover:shadow-lg hover:shadow-purple-500/50 transition-all uppercase tracking-wider"
-              >
-                Add First Week
-              </button>
-            )}
+        {/* VO2 Progress Card */}
+        <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 mb-6">
+          <div className="flex items-start justify-between mb-6">
+            <div>
+              <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">VO2 MAX PROGRESS</h3>
+              <div className="text-5xl font-light">{currentWeek?.vo2_max || selectedAthlete?.baseline_vo2 || '-'}</div>
+            </div>
+            <div className="relative w-20 h-20">
+              <svg className="transform -rotate-90 w-20 h-20">
+                <circle cx="40" cy="40" r="32" stroke="currentColor" strokeWidth="6" fill="transparent" className="text-slate-700" />
+                <circle 
+                  cx="40" cy="40" r="32" 
+                  stroke="url(#gradient)" 
+                  strokeWidth="6" 
+                  fill="transparent"
+                  strokeDasharray={`${2 * Math.PI * 32}`}
+                  strokeDashoffset={`${2 * Math.PI * 32 * (1 - progress / 100)}`}
+                  className="transition-all duration-500"
+                  strokeLinecap="round"
+                />
+                <defs>
+                  <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#a855f7" />
+                    <stop offset="100%" stopColor="#ec4899" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="text-sm font-medium">{progress}%</span>
+              </div>
+            </div>
           </div>
-        ) : (
-          <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 mb-6">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-light">Week {currentWeek.week_num}</h2>
-              <input
-                type="date"
-                value={currentWeek.date || ''}
-                onChange={(e) => canEdit && updateField(currentWeek.id, 'date', e.target.value)}
-                disabled={!canEdit}
-                className="bg-black/50 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white disabled:opacity-50"
-              />
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-xs text-gray-500 mb-1">This Week</div>
+              <div className="text-2xl font-light">{currentWeek?.total_volume || 0}</div>
+              <div className="text-xs text-gray-500">miles</div>
             </div>
-
-            {/* VO2 Progress & Volume */}
-            <div className="mb-6 p-4 bg-white/5 rounded-xl">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">VO2 Max</div>
-                  <div className="text-2xl font-light">{currentWeek.vo2_max || selectedAthlete.current_vo2 || '-'}</div>
-                </div>
-                <div className="relative w-16 h-16">
-                  <svg className="transform -rotate-90 w-16 h-16">
-                    <circle cx="32" cy="32" r="28" stroke="currentColor" strokeWidth="4" fill="none" className="text-white/10" />
-                    <circle cx="32" cy="32" r="28" stroke="url(#grad)" strokeWidth="4" fill="none" 
-                      strokeDasharray="176" 
-                      strokeDashoffset={176 - (176 * progress / 100)} 
-                      className="transition-all" 
-                      strokeLinecap="round" />
-                    <defs>
-                      <linearGradient id="grad">
-                        <stop offset="0%" stopColor="#a855f7" />
-                        <stop offset="100%" stopColor="#ec4899" />
-                      </linearGradient>
-                    </defs>
-                  </svg>
-                  <div className="absolute inset-0 flex items-center justify-center text-xs text-white/60">{progress}%</div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-white/5 rounded-lg p-3">
-                  <div className="text-xs text-gray-400 mb-1">This Week</div>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={currentWeek.total_volume || ''}
-                    onChange={(e) => canEdit && updateField(currentWeek.id, 'total_volume', e.target.value)}
-                    disabled={!canEdit}
-                    placeholder="0"
-                    className="w-full bg-transparent text-white font-medium text-lg text-center outline-none disabled:opacity-50"
-                  />
-                  <div className="text-xs text-gray-400 text-center">miles</div>
-                </div>
-                <div className="bg-white/5 rounded-lg p-3">
-                  <div className="text-xs text-gray-400 mb-1">Baseline</div>
-                  <div className="text-lg font-medium text-center">{selectedAthlete.baseline_weekly_miles || '-'}</div>
-                  <div className="text-xs text-gray-400 text-center">miles</div>
-                </div>
-              </div>
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-xs text-gray-500 mb-1">Last Week</div>
+              <div className="text-2xl font-light">{lastWeek?.total_volume || 0}</div>
+              <div className="text-xs text-gray-500">miles</div>
             </div>
-
-            {/* Sunday Check-in - just showing first few sliders for brevity */}
-            <div className="mb-6">
-              <h3 className="text-sm font-medium uppercase tracking-wider mb-4">Sunday Check-in</h3>
-              <div className="space-y-6">
-                {/* VO2 Slider */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-xs text-gray-500 uppercase tracking-wider flex items-center gap-2">
-                      <TrendingUp size={14} className="text-purple-300" />
-                      VO2 Max
-                    </label>
-                    <span className="text-lg font-light">{currentWeek.vo2_max || '-'}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="40"
-                    max="70"
-                    value={currentWeek.vo2_max || 50}
-                    onChange={(e) => canEdit && updateField(currentWeek.id, 'vo2_max', e.target.value)}
-                    disabled={!canEdit}
-                    className="w-full h-2 rounded-full appearance-none cursor-pointer accent-purple-500 disabled:opacity-50"
-                    style={{
-                      background: `linear-gradient(to right, #a855f7 0%, #a855f7 ${((currentWeek.vo2_max || 50) - 40) / 30 * 100}%, rgba(255,255,255,0.1) ${((currentWeek.vo2_max || 50) - 40) / 30 * 100}%, rgba(255,255,255,0.1) 100%)`
-                    }}
-                  />
-                  <div className="flex justify-between text-xs text-gray-600 mt-1">
-                    <span>40</span>
-                    <span>70</span>
-                  </div>
-                </div>
-
-                {/* Add similar sliders for HR, HRV, Weight, Sleep... (code from previous part 3) */}
-              </div>
-            </div>
-
-            {/* Add Week button */}
-            {canEdit && (
-              <button
-                onClick={addWeek}
-                className="w-full py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-medium uppercase tracking-wider hover:shadow-lg hover:shadow-purple-500/50 transition-all"
-              >
-                Add New Week
-              </button>
-            )}
           </div>
-        )}
+        </div>
+
+        {/* Sunday Check-in */}
+        <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 mb-6">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-sm font-medium uppercase tracking-wider">SUNDAY CHECK-IN</h3>
+            <ChevronDown size={20} className="text-gray-500" />
+          </div>
+
+          {/* VO2 Max Slider */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <TrendingUp size={16} />
+                <span>VO2 MAX</span>
+              </div>
+              <span className="text-2xl font-light">{currentWeek?.vo2_max || '-'}</span>
+            </div>
+            <input
+              type="range"
+              min="40"
+              max="70"
+              value={currentWeek?.vo2_max || 50}
+              onChange={(e) => canEdit && updateField(currentWeek?.id, 'vo2_max', e.target.value)}
+              disabled={!canEdit}
+              className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer slider-purple"
+            />
+            <div className="flex justify-between text-xs text-gray-600 mt-1">
+              <span>40</span>
+              <span className="text-gray-500">Last week: {lastWeek?.vo2_max || '-'}</span>
+              <span>70</span>
+            </div>
+          </div>
+
+          {/* Resting HR Slider */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <Heart size={16} />
+                <span>RESTING HR</span>
+              </div>
+              <span className="text-2xl font-light">{currentWeek?.resting_hr || '-'}</span>
+            </div>
+            <input
+              type="range"
+              min="40"
+              max="80"
+              value={currentWeek?.resting_hr || 60}
+              onChange={(e) => canEdit && updateField(currentWeek?.id, 'resting_hr', e.target.value)}
+              disabled={!canEdit}
+              className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer slider-purple"
+            />
+            <div className="flex justify-between text-xs text-gray-600 mt-1">
+              <span>40</span>
+              <span className="text-gray-500">Last: {lastWeek?.resting_hr || '-'}</span>
+              <span>80</span>
+            </div>
+          </div>
+
+          {/* HRV Slider */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <Activity size={16} />
+                <span>HRV</span>
+              </div>
+              <div className="text-right">
+                <div className="text-2xl font-light">{currentWeek?.hrv || '-'}</div>
+                <div className={`text-xs ${hrvStatus.color}`}>{hrvStatus.text}</div>
+              </div>
+            </div>
+            <input
+              type="range"
+              min="30"
+              max="100"
+              value={currentWeek?.hrv || 65}
+              onChange={(e) => canEdit && updateField(currentWeek?.id, 'hrv', e.target.value)}
+              disabled={!canEdit}
+              className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer slider-purple"
+            />
+            <div className="flex justify-between text-xs text-gray-600 mt-1">
+              <span>30</span>
+              <span className="text-purple-400">Range: {selectedAthlete?.hrv_baseline_low || '-'}-{selectedAthlete?.hrv_baseline_high || '-'}</span>
+              <span>100</span>
+            </div>
+          </div>
+
+          {/* Weight Slider */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <TrendingUp size={16} />
+                <span>WEIGHT (LBS)</span>
+              </div>
+              <span className="text-2xl font-light">{currentWeek?.weight || '-'}</span>
+            </div>
+            <input
+              type="range"
+              min="120"
+              max="220"
+              value={currentWeek?.weight || selectedAthlete?.starting_weight || 165}
+              onChange={(e) => canEdit && updateField(currentWeek?.id, 'weight', e.target.value)}
+              disabled={!canEdit}
+              className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer slider-purple"
+            />
+            <div className="flex justify-between text-xs text-gray-600 mt-1">
+              <span>120</span>
+              <span className="text-gray-500">Last: {lastWeek?.weight || '-'}</span>
+              <span>220</span>
+            </div>
+          </div>
+
+          {/* Sleep Quality Slider */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <Activity size={16} />
+                <span>SLEEP QUALITY</span>
+              </div>
+              <span className="text-2xl font-light">{currentWeek?.sleep_quality || '-'}/10</span>
+            </div>
+            <input
+              type="range"
+              min="1"
+              max="10"
+              value={currentWeek?.sleep_quality || 7}
+              onChange={(e) => canEdit && updateField(currentWeek?.id, 'sleep_quality', e.target.value)}
+              disabled={!canEdit}
+              className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer slider-purple"
+            />
+            <div className="flex justify-between text-xs text-gray-600 mt-1">
+              <span>Poor</span>
+              <span className="text-gray-500">Last: {lastWeek?.sleep_quality || '-'}</span>
+              <span>Great</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Key Sessions */}
+        <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-medium uppercase tracking-wider">KEY SESSIONS</h3>
+            <button className="text-purple-400 text-sm">Edit</button>
+          </div>
+
+          <div className="space-y-4">
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-xs text-gray-500 mb-2 uppercase tracking-wider">Threshold</div>
+              <div className="text-sm">6.2mi • 7:15/mi • 165 HR</div>
+            </div>
+
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-xs text-gray-500 mb-2 uppercase tracking-wider">Long Run</div>
+              <div className="text-sm">90min • 12mi • 7:30/mi • 152 HR</div>
+            </div>
+
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-xs text-gray-500 mb-2 uppercase tracking-wider">Speed/VO2</div>
+              <div className="text-sm">6x800m • 5:45/mi • 178 HR • Rec: 145</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Save Week Button */}
+        <button
+          onClick={() => addWeek()}
+          className="w-full py-4 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-2xl font-medium uppercase tracking-wider hover:shadow-lg hover:shadow-purple-500/50 transition-all mb-6"
+        >
+          SAVE WEEK
+        </button>
       </div>
+
       <BottomNav />
+
+      <style jsx>{`
+        .slider-purple::-webkit-slider-thumb {
+          appearance: none;
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          background: linear-gradient(135deg, #a855f7, #ec4899);
+          cursor: pointer;
+          box-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
+        }
+
+        .slider-purple::-moz-range-thumb {
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          background: linear-gradient(135deg, #a855f7, #ec4899);
+          cursor: pointer;
+          border: none;
+          box-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
+        }
+      `}</style>
     </div>
   );
 }
